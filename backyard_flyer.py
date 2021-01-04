@@ -23,95 +23,158 @@ class BackyardFlyer(Drone):
     def __init__(self, connection):
         super().__init__(connection)
         self.target_position = np.array([0.0, 0.0, 0.0])
-        self.all_waypoints = []
+        self.square = {"side": 8.0, "height": 5.0}
+        self.all_waypoints = self.calculate_box()
+        self.target_wp_idx = -1
         self.in_mission = True
         self.check_state = {}
+        self.tol = 0.2
 
         # initial state
-        self.flight_state = States.MANUAL
+        self.flight_phase = States.MANUAL
 
-        # TODO: Register all your callbacks here
+        # Register all your callbacks here
         self.register_callback(MsgID.LOCAL_POSITION, self.local_position_callback)
         self.register_callback(MsgID.LOCAL_VELOCITY, self.velocity_callback)
         self.register_callback(MsgID.STATE, self.state_callback)
 
     def local_position_callback(self):
         """
-        TODO: Implement this method
-
-        This triggers when `MsgID.LOCAL_POSITION` is received and self.local_position contains new data
+        This triggers when MsgID.LOCAL_POSITION is received and self.local_position contains new data
         """
-        pass
+        if self.flight_phase == States.WAYPOINT:
+            self.waypoint_transition()
+        if self.flight_phase == States.TAKEOFF:
+            # coordinate conversion
+            altitude = -1.0 * self.local_position[2]
+            # check if altitude is within 95% of target
+            if altitude > 0.95 * self.target_position[2]:
+                self.flight_phase = States.WAYPOINT
+                self.waypoint_transition()
 
     def velocity_callback(self):
         """
-        TODO: Implement this method
-
         This triggers when `MsgID.LOCAL_VELOCITY` is received and self.local_velocity contains new data
         """
-        pass
+        if self.flight_phase == States.LANDING:
+            if (
+                (self.global_position[2] - self.global_home[2] < 0.1)
+                and (abs(self.local_position[2]) < 0.01)
+            ):
+                self.disarming_transition()
 
     def state_callback(self):
         """
-        TODO: Implement this method
-
         This triggers when `MsgID.STATE` is received and self.armed and self.guided contain new data
         """
-        pass
+        if not self.in_mission:
+            return
+        if self.flight_phase == States.MANUAL:
+            self.arming_transition()
+        elif self.flight_phase == States.ARMING:
+            self.takeoff_transition()
+        elif self.flight_phase == States.DISARMING:
+            self.manual_transition()
 
     def calculate_box(self):
-        """TODO: Fill out this method
-        
+        """
         1. Return waypoints to fly a box
         """
-        pass
+        h = self.square["height"]
+        s = self.square["side"]
+        return [[s, 0, h], [s, s, h], [0, s, h], [0, 0, h]]
 
     def arming_transition(self):
-        """TODO: Fill out this method
-        
+        """
         1. Take control of the drone
         2. Pass an arming command
         3. Set the home location to current position
         4. Transition to the ARMING state
         """
         print("arming transition")
+        self.take_control()
+        self.arm()
+
+        # set the current location to be the home position
+        self.set_home_position(self.global_position[0],
+                               self.global_position[1],
+                               self.global_position[2])
+        print("Home position: {}".format(self.global_position))
+        self.flight_phase = States.ARMING
 
     def takeoff_transition(self):
-        """TODO: Fill out this method
-        
-        1. Set target_position altitude to 3.0m
-        2. Command a takeoff to 3.0m
+        """
+        1. Set target_position altitude to the desired height
+        2. Command a takeoff
         3. Transition to the TAKEOFF state
         """
         print("takeoff transition")
+        target_altitude = self.square["height"]
+        self.target_position[2] = target_altitude
+        self.takeoff(target_altitude)
+        self.flight_phase = States.TAKEOFF
+
+    def target_reach(self):
+        """Calculates proximity to the target
+        :returns: True/False if the target is reached
+        """
+        x = self.local_position[0]
+        y = self.local_position[1]
+        z = -1.0 * self.local_position[2]
+        if (
+            (abs(x - self.target_position[0]) < self.tol)
+            and (abs(y - self.target_position[1]) < self.tol)
+            and (abs(z - self.target_position[2]) < self.tol)
+        ):
+            return True
+        else:
+            return False
+
+    def update_target(self):
+        """Updates the coordinates of the next target
+        """
+        self.target_position = self.all_waypoints[self.target_wp_idx]
 
     def waypoint_transition(self):
-        """TODO: Fill out this method
-    
+        """
         1. Command the next waypoint position
         2. Transition to WAYPOINT state
         """
-        print("waypoint transition")
+        self.flight_phase = States.WAYPOINT
+        if self.target_reach() or self.target_wp_idx == -1:
+            if self.target_wp_idx < 3:
+                self.target_wp_idx += 1
+                self.update_target()
+                self.cmd_position(self.target_position[0],
+                                  self.target_position[1],
+                                  self.target_position[2],
+                                  0
+                                  )
+            else:
+                self.landing_transition()
 
     def landing_transition(self):
-        """TODO: Fill out this method
-        
+        """Initiates the landing phase
+
         1. Command the drone to land
         2. Transition to the LANDING state
         """
         print("landing transition")
+        self.land()
+        self.flight_phase = States.LANDING
 
     def disarming_transition(self):
-        """TODO: Fill out this method
-        
+        """
         1. Command the drone to disarm
         2. Transition to the DISARMING state
         """
         print("disarm transition")
+        self.disarm()
+        self.flight_phase = States.DISARMING
 
     def manual_transition(self):
         """This method is provided
-        
+
         1. Release control of the drone
         2. Stop the connection (and telemetry log)
         3. End the mission
@@ -126,7 +189,7 @@ class BackyardFlyer(Drone):
 
     def start(self):
         """This method is provided
-        
+
         1. Open a log file
         2. Start the drone connection
         3. Close the log file
@@ -146,7 +209,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     conn = MavlinkConnection('tcp:{0}:{1}'.format(args.host, args.port), threaded=False, PX4=False)
-    #conn = WebSocketConnection('ws://{0}:{1}'.format(args.host, args.port))
+    # conn = WebSocketConnection('ws://{0}:{1}'.format(args.host, args.port))
     drone = BackyardFlyer(conn)
     time.sleep(2)
     drone.start()
