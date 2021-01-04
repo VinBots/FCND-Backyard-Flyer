@@ -99,7 +99,6 @@ class BackyardFlyer(Drone):
         self.set_home_position(self.global_position[0],
                                self.global_position[1],
                                self.global_position[2])
-        print("Home position: {}".format(self.global_position))
         self.flight_phase = States.ARMING
 
     def takeoff_transition(self):
@@ -145,6 +144,7 @@ class BackyardFlyer(Drone):
             if self.target_wp_idx < 3:
                 self.target_wp_idx += 1
                 self.update_target()
+                print("New waypoint: {}...".format(self.target_position))
                 self.cmd_position(self.target_position[0],
                                   self.target_position[1],
                                   self.target_position[2],
